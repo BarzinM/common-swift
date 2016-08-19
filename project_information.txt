@@ -1,0 +1,41 @@
+ssh 192.168.5.11 -l ubuntu
+roslaunch mavros px4.launch
+rosrun mavros mavsys mode -c OFFBOARD
+rosrun mavros mavsafety arm
+Chaning parameters from terminal:
+rosservice call /mavros/param/get  MPC_Z_P # https://pixhawk.org/firmware/parameters
+rosservice call /mavros/param/set  MPC_Z_P [0,1.1]
+rosservice call /mavros/mission/pull
+Vertical movement configurations:
+- MPC_Z_P
+- MPC_Z_VEL_P
+- MPC_Z_FF
+- MPC_Z_VEL_D
+- MPC_Z_VEL_I
+- MPC_Z_VEL_MAX
+--------------------------------------------
+You need to set the parameter CBRK_NO_VISION to 0 on your PX4 in order for the system to accept external estimates from the VISION_POSITION_ESTIMATE message (https://pixhawk.org/dev/ros/visual_estimation)
+
+MAYBE: echo 'export ARM_ARCHITECTURE=True' >> ~/.bashrc #This flag is for compiling on the Odroid (https://pixhawk.org/dev/ros/visual_estimation)
+
+
+
+send setpoint
+
+https://pixhawk.org/dev/ros/mavros_offboard
+
+
+
+Checkout: https://github.com/uzh-rpg/rpg_svo
+
+<class name="vision_pose_estimate" type="mavplugin::VisionPoseEstimatePlugin" base_class_type="mavplugin::MavRosPlugin">
+    <description>Send vision pose estimate to FCU.</description>
+</class>
+
+
+
+TELEM2 is supported by default and can be activated by setting the SYS_COMPANION parameter to 921600. In software this port is located at /dev/ttyS2. 
+
+
+for uart change: <arg name="fcu_url" default="/dev/ttyACM0:57600" /> in px4.launch
+
