@@ -1,13 +1,34 @@
 #!/usr/bin/env python
 
+# __          __        _
+# \ \        / /       | |
+#  \ \  /\  / /__  _ __| | __
+#   \ \/  \/ / _ \| '__| |/ /
+#    \  /\  / (_) | |  |   <
+#  ___\/  \/ \___/|_|  |_|\_\
+# |_   _|
+#   | |  _ __
+#   | | | '_ \
+#  _| |_| | | |
+# |_____|_| |_|
+# |  __ \
+# | |__) | __ ___   __ _ _ __ ___  ___ ___
+# |  ___/ '__/ _ \ / _` | '__/ _ \/ __/ __|
+# | |   | | | (_) | (_| | | |  __/\__ \__ \
+# |_|   |_|  \___/ \__, |_|  \___||___/___/
+#                   __/ |
+#                  |___/
+
+
 import rospy
 import threading
 from time import time, sleep
 import mavros
 import sys
+from control import PID
 
-from math import * # TODO: clarify
-from mavros.utils import * # TODO: clarify
+from math import *  # TODO: clarify
+from mavros.utils import *  # TODO: clarify
 from mavros import setpoint
 from transformations import quaternion_from_euler
 from communication import LabLocalization
@@ -17,7 +38,7 @@ nan_value = float('nan')
 
 def getError(x, y=[0, 0, 0], bound=None):
     distance = sqrt(sum([(xi - yi)**2 for xi, yi in zip(x, y)]))
-    if bound == None:
+    if bound is None:
         return distance
     return distance < bound
 
@@ -91,7 +112,7 @@ class AerialNavigation:
 
         print "Navigation is starting."
         self.yaw_degrees = 0  # Initialize to North, TODO: remove/modify
-        while not rospy.is_shutdown(): 
+        while not rospy.is_shutdown():
             if self.nav_mod != "POSITION":
                 rate_mode_check.sleep()
                 continue
@@ -298,8 +319,8 @@ class AerialNavigation:
             )
         )
 
-        horizontal_p, horizontal_i, horizontal_d = .1,0,0
-        vertical_p, vertical_i, vertical_d = .1,0,0
+        horizontal_p, horizontal_i, horizontal_d = .1, 0, 0
+        vertical_p, vertical_i, vertical_d = .1, 0, 0
         integrated_error_x = 0
         integrated_error_y = 0
         integrated_error_z = 0
@@ -307,7 +328,7 @@ class AerialNavigation:
         time_old = time()
         time_start = time()
         self.nav_mod = "VELOCITY"
-        while time()-time_start<duration:
+        while time() - time_start < duration:
             states = self.getStates()
             time_now = time()
             time_difference = now - time_old
@@ -319,16 +340,16 @@ class AerialNavigation:
             error_z = point[2] - states[2]
             integrated_error_z += error_z * time_difference
 
-            velocity_action_x = horizontal_p * error_x+
-                horizontal_i * integrated_error_x+
+            velocity_action_x = horizontal_p * error_x +\
+                horizontal_i * integrated_error_x +\
                 horizontal_d * (states[0] - previous_x) / time_difference
 
-            velocity_action_y = horizontal_p * error_y+
-                horizontal_i * integrated_error_y+
+            velocity_action_y = horizontal_p * error_y +\
+                horizontal_i * integrated_error_y +\
                 horizontal_d * (states[0] - previous_y) / time_difference
 
-            velocity_action_z = vertical_p * error_z+
-                vertical_i * integrated_error_z+
+            velocity_action_z = vertical_p * error_z +\
+                vertical_i * integrated_error_z +\
                 vertical_d * (states[0] - previous_z) / time_difference
 
             message_velocity.twist.linear.x = velocity_action_x
