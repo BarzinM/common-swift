@@ -144,7 +144,7 @@ class NaslabNetwork(object):
         self.sock.close()
 
 
-class LabNavigation(object):
+class LabLocalization(object):
 
     def __init__(self, ip_address='192.168.0.25'):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

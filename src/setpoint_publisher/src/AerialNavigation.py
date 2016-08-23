@@ -6,11 +6,11 @@ from time import time, sleep
 import mavros
 import sys
 
-from math import *
-from mavros.utils import *
+from math import * # TODO: clarify
+from mavros.utils import * # TODO: clarify
 from mavros import setpoint
 from transformations import quaternion_from_euler
-from communication import LabNavigation
+from communication import LabLocalization
 
 nan_value = float('nan')
 
@@ -52,7 +52,7 @@ class AerialNavigation:
     """
 
     def __init__(self):
-        self.localizer = LabNavigation()
+        self.localizer = LabLocalization()
         self.setpoint_x = 0.0
         self.setpoint_y = 0.0
         self.setpoint_z = 0.0
@@ -62,9 +62,9 @@ class AerialNavigation:
         self.minimum_altitude = []
 
         # publisher for mavros/setpoint_position/local
-        self.position_setpoint = setpoint.get_pub_position_local(queue_size=1)
+        self.setpoint_position = setpoint.get_pub_position_local(queue_size=1)
         # publisher for mavros/setpoint_velocity/cmd_vel
-        self.velocity_setpoint = setpoint.get_pub_velocity_cmd_vel(queue_size=1)
+        self.setpoint_velocity = setpoint.get_pub_velocity_cmd_vel(queue_size=1)
         # subscriber for mavros/local_position/local
         self.sub = rospy.Subscriber(mavros.get_topic('local_position', 'pose'),
                                     setpoint.PoseStamped, self.reached, queue_size=1)
@@ -76,31 +76,35 @@ class AerialNavigation:
         self.done = False
         self.done_evt = threading.Event()
 
-    def navigate(self):
-        rate = rospy.Rate(5)   # in Hz
+    def getStates(self):
+        return (self.pos_x, self.pos_y, self.pos_z, self.yaw_degrees)
 
-        pos_message = setpoint.PoseStamped(
+    def navigate(self):
+        rate = rospy.Rate(8)   # in Hz
+        rate_mode_check = rospy.Rate(20)
+
+        message_pos = setpoint.PoseStamped(
             header=setpoint.Header(
-                frame_id="base_footprint",  # no matter, plugin don't use TF
+                frame_id="base_footprint",  # no matter, plugin doesn't use TF
                 stamp=rospy.Time.now()),    # stamp should update
         )
 
         print "Navigation is starting."
-        self.yaw_degrees = 0  # North
-        while not rospy.is_shutdown():
+        self.yaw_degrees = 0  # Initialize to North, TODO: remove/modify
+        while not rospy.is_shutdown(): 
             if self.nav_mod != "POSITION":
+                rate_mode_check.sleep()
                 continue
-            pos_message.pose.position.x = self.setpoint_x
-            pos_message.pose.position.y = self.setpoint_y
-            pos_message.pose.position.z = self.setpoint_z
+            message_pos.pose.position.x = self.setpoint_x
+            message_pos.pose.position.y = self.setpoint_y
+            message_pos.pose.position.z = self.setpoint_z
 
-            # For demo purposes we will lock yaw/heading to north.
             yaw = radians(self.yaw_degrees)
             quaternion = quaternion_from_euler(0, 0, yaw)
-            pos_message.pose.orientation = setpoint.Quaternion(*quaternion)
+            message_pos.pose.orientation = setpoint.Quaternion(*quaternion)
 
             try:
-                self.position_setpoint.publish(pos_message)
+                self.setpoint_position.publish(message_pos)
                 rate.sleep()
             except rospy.ROSException:
                 print 'Process terminated. Stoping Navigation!'
@@ -109,24 +113,26 @@ class AerialNavigation:
 
     def targetVelocity(self, x, y, z, yaw, operation_condition_function):
         rate = rospy.Rate(5)
-        velocity_message_zero = setpoint.TwistStamped(
+        message_velocity_zero = setpoint.TwistStamped(
             header=setpoint.Header(
                 frame_id="some_frame_id",
                 stamp=rospy.Rime.now()
             )
         )
-        velocity_message = velocity_message_zero
-        velocity_message.twist.linear.x = x
-        velocity_message.twist.linear.y = y
-        velocity_message.twist.linear.z = z
+        message_velocity = message_velocity_zero
+        message_velocity.twist.linear.x = x
+        message_velocity.twist.linear.y = y
+        message_velocity.twist.linear.z = z
         if yaw is not None:
-            velocity_message.twist.angular.z = yaw
+            message_velocity.twist.angular.z = yaw
         try:
             self.nav_mod = "VELOCITY"
-            while operation_condition_function():
-                self.velocity_setpoint.publish(velocity_message)
+            while not rospy.is_shutdown() and operation_condition_function():
+                # message_velocity.header.stamp = rospy.Rime.now()
+                self.setpoint_velocity.publish(message_velocity)
                 rate.sleep()
-            self.velocity_setpoint.publish(velocity_message_zero)
+            # message_velocity_zero.header.stamp = rospy.Rime.now()
+            self.setpoint_velocity.publish(message_velocity_zero)
             self.targetPoint(self.pos_x, self.pos_y, self.pos_z)
         except rospy.ROSException:
             print 'Process terminated. Stoping Navigation!'
@@ -224,7 +230,7 @@ class AerialNavigation:
         print 'go above it'
         self.targetPoint(x, y, z, 5, True)
 
-    def hoverAboveDynamic(self, object_id, distance, duration):
+    def dynamicHover(self, object_id, distance, duration):
         z = self.localizer.getStates(object_id)[3] + distance
         if z == z:
             self.targetPoint(self.pos_x, self.pos_y, z, 1, True)
@@ -251,7 +257,7 @@ class AerialNavigation:
 
     def objectLand(self, object_id):
         # get object location
-        mission_healthy = True
+        # mission_healthy = True
         landed = False
         object_position = self.localizer.getStates(object_id)[1:3]
         landing_station = IsMoving(object_position)
@@ -259,7 +265,7 @@ class AerialNavigation:
         while True and not landed:
             object_position = self.localizer.getStates(object_id)[1:3]
             if landing_station.moved(object_position) and not landed:
-                mission_healthy = False
+                # mission_healthy = False
                 print 'Aborting landing mission'
                 break
             self.minimum_altitude = self.pos_z
@@ -276,48 +282,115 @@ class AerialNavigation:
     def verticalVelocity(self, velocity):
         pass
 
+    def stabilize(self, duration, point=None):
+        if point is None:
+            point = self.getStates()
+        else:
+            if len(point) < 3:
+                raise 'point needs to be a sequence with 3 or 4 elements: (x, y, z[, yaw])'
+        point = point[:4]
 
-def setpoint_demo(navigation, sleep_time):
+        rate = rospy.Rate(50)
+        message_velocity = setpoint.TwistStamped(
+            header=setpoint.Header(
+                frame_id="some_frame_id",
+                stamp=rospy.Rime.now()
+            )
+        )
+
+        horizontal_p, horizontal_i, horizontal_d = .1,0,0
+        vertical_p, vertical_i, vertical_d = .1,0,0
+        integrated_error_x = 0
+        integrated_error_y = 0
+        integrated_error_z = 0
+        previous_x, previous_y, previous_z = self.getStates()[:3]
+        time_old = time()
+        time_start = time()
+        self.nav_mod = "VELOCITY"
+        while time()-time_start<duration:
+            states = self.getStates()
+            time_now = time()
+            time_difference = now - time_old
+            time_old = time_now
+            error_x = point[0] - states[0]
+            integrated_error_x += error_x * time_difference
+            error_y = point[1] - states[1]
+            integrated_error_y += error_y * time_difference
+            error_z = point[2] - states[2]
+            integrated_error_z += error_z * time_difference
+
+            velocity_action_x = horizontal_p * error_x+
+                horizontal_i * integrated_error_x+
+                horizontal_d * (states[0] - previous_x) / time_difference
+
+            velocity_action_y = horizontal_p * error_y+
+                horizontal_i * integrated_error_y+
+                horizontal_d * (states[0] - previous_y) / time_difference
+
+            velocity_action_z = vertical_p * error_z+
+                vertical_i * integrated_error_z+
+                vertical_d * (states[0] - previous_z) / time_difference
+
+            message_velocity.twist.linear.x = velocity_action_x
+            message_velocity.twist.linear.y = velocity_action_y
+            message_velocity.twist.linear.z = velocity_action_z
+            self.setpoint_velocity.publish(message_velocity)
+
+            x_previous, y_previous, z_previous = states[:3]
+            rate.sleep()
+
+
+def setpoint_demo(navigation, ):
+    time_sleep = 3
     sleep(2)
     start_x, start_y, start_z = hexacopter_navigation.getPosition()
     print 'Started from', start_x, start_y, start_z
     navigation.changeAltitude(.4)
-    sleep(sleep_time)
+    sleep(time_sleep)
     for i in range(1):
         print "Attempt", i
 
         navigation.horizontalTarget(0, 0)
-        sleep(sleep_time)
-        # navigation.horizontalTarget(1, 1)
-        # sleep(sleep_time)
-        # navigation.hoverAboveDynamic(2, .8, 10)
-        # sleep(sleep_time)
-        # navigation.hoverAboveDynamic(2, .6, 10)
-        # sleep(sleep_time)
-        # navigation.hoverAboveDynamic(2, .6, 10)
-        # sleep(sleep_time)
+        sleep(time_sleep)
+        cond_pos = navigation.getStates()
 
-        # navigation.hoverAboveDynamic(2, .8, 5)
-        # sleep(sleep_time)
+        def cond():
+            current_pos = navigation.getStates()
+            getError(current_pos, cond_pos, .2)
+
+        print('Condition test:', cond())
+
+        navigation.targetVelocity(0, 0, -.05, 0, cond)
+        # navigation.horizontalTarget(1, 1)
+        # sleep(time_sleep)
+        # navigation.dynamicHover(2, .8, 10)
+        # sleep(time_sleep)
+        # navigation.dynamicHover(2, .6, 10)
+        # sleep(time_sleep)
+        # navigation.dynamicHover(2, .6, 10)
+        # sleep(time_sleep)
+
+        # navigation.dynamicHover(2, .8, 5)
+        # sleep(time_sleep)
         # navigation.horizontalTarget(0, 0)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.goToAltitude(start_z + .1)
         navigation.exactLand(0, 0)
 
         # navigation.horizontalTarget(start_x + .3, start_y + .3)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.horizontalTarget(start_x, start_y)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.targetPoint(start_x, start_y, start_z + .5, 1, True)
         # navigation.targetPoint(start_x, start_y, start_z + .2)
         # navigation.hoverAbove(1, .3)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.goToAltitude(.3)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.changeAltitude(.2)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.horizontalTarget(start_x, start_y)
-        # sleep(sleep_time)
+        # sleep(time_sleep)
         # navigation.inPlaceLand(False)
         # navigation.changeAltitude(-.1)
         # navigation.changeAltitude(-.1)
@@ -335,7 +408,7 @@ if __name__ == '__main__':
     mavros.set_namespace()  # initialize mavros module with default namespace
     hexacopter_navigation = AerialNavigation()
     try:
-        setpoint_demo(hexacopter_navigation, 3)
+        setpoint_demo(hexacopter_navigation)
     except Exception, e:
         print 'EXCEPTION', e
         hexacopter_navigation.inPlaceLand(False)
