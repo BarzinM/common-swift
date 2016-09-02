@@ -23,21 +23,29 @@
 import rospy
 import threading
 from time import time, sleep
-import mavros
+# import mavros
 import sys
 from control import PID
 
 from math import *  # TODO: clarify
-from mavros.utils import *  # TODO: clarify
-from mavros import setpoint
+# from mavros.utils import *  # TODO: clarify
+# from mavros import setpoint
 from transformations import quaternion_from_euler
 from communication import LabLocalization
+from sys import path
+path.append(path[0] + '/../../Modules/dev_box/')
+print path[-1]
+import dev_and_text_tools as dvt
+
+# dvt.bigAlert('Here')
 
 nan_value = float('nan')
 
+loger = dvt.setupLogger(True,'Aerial_nav',True)
+loger.debug('start of the process')
 
 def getError(x, y=[0, 0, 0], bound=None):
-    distance = sqrt(sum([(xi - yi)**2 for xi, yi in zip(x, y)]))
+    distance = sqrt(x[0] - y[0])**2 + (x[1] - y[1])**2 + (x[2] - y[2])**2
     if bound is None:
         return distance
     return distance < bound
@@ -80,7 +88,11 @@ class AerialNavigation:
         self.pos_x = 0.0
         self.pos_y = 0.0
         self.pos_z = 0.0
+        self.yaw_degrees = 0.
         self.minimum_altitude = []
+        self.horizontal_pid = 0, 1., 0
+        self.vertical_pid = 0, 0., 0
+        self.nav_mod = "POSITION"
 
         # publisher for mavros/setpoint_position/local
         self.setpoint_position = setpoint.get_pub_position_local(queue_size=1)
@@ -125,19 +137,35 @@ class AerialNavigation:
             message_pos.pose.orientation = setpoint.Quaternion(*quaternion)
 
             try:
-                self.setpoint_position.publish(message_pos)
+                # self.setpoint_position.publish(message_pos)
                 rate.sleep()
             except rospy.ROSException:
                 print 'Process terminated. Stoping Navigation!'
 
         print 'Navigation Exited!!!!'
 
-    def targetVelocity(self, x, y, z, yaw, operation_condition_function):
+    def __assignVelocity(self, x, y, z, yaw):
+        message_velocity = setpoint.TwistStamped(
+            header=setpoint.Header(
+                frame_id="some_frame_id",
+                stamp=rospy.Time.now()
+            )
+        )
+        message_velocity.twist.linear.x = x
+        message_velocity.twist.linear.y = y
+        message_velocity.twist.linear.z = z
+        message_velocity.twist.angular.z = yaw
+        try:
+            self.setpoint_velocity.publish(message_velocity)
+        except rospy.ROSException:
+            print 'Process terminated. Stopping Navigation!'
+
+    def conditionedVelocity(self, x, y, z, yaw, operation_condition_function):
         rate = rospy.Rate(5)
         message_velocity_zero = setpoint.TwistStamped(
             header=setpoint.Header(
                 frame_id="some_frame_id",
-                stamp=rospy.Rime.now()
+                stamp=rospy.Time.now()
             )
         )
         message_velocity = message_velocity_zero
@@ -149,10 +177,10 @@ class AerialNavigation:
         try:
             self.nav_mod = "VELOCITY"
             while not rospy.is_shutdown() and operation_condition_function():
-                # message_velocity.header.stamp = rospy.Rime.now()
+                # message_velocity.header.stamp = rospy.Time.now()
                 self.setpoint_velocity.publish(message_velocity)
                 rate.sleep()
-            # message_velocity_zero.header.stamp = rospy.Rime.now()
+            # message_velocity_zero.header.stamp = rospy.Time.now()
             self.setpoint_velocity.publish(message_velocity_zero)
             self.targetPoint(self.pos_x, self.pos_y, self.pos_z)
         except rospy.ROSException:
@@ -187,9 +215,7 @@ class AerialNavigation:
         self.pos_x = topic.pose.position.x
         self.pos_y = topic.pose.position.y
         self.pos_z = topic.pose.position.z
-        if isNear(self.pos_x, self.setpoint_x) and \
-           isNear(self.pos_y, self.setpoint_y) and \
-           isNear(self.pos_z, self.setpoint_z):
+        if getError(self.getPosition,[self.setpoint_x,self.setpoint_y,self.setpoint_z],bound=.1):
             self.done = True
             self.done_evt.set()
 
@@ -300,8 +326,38 @@ class AerialNavigation:
                 break
                 print 'Landed'
 
-    def verticalVelocity(self, velocity):
-        pass
+    def verticalVelocity(self, velocity, duration):
+        message_velocity = setpoint.TwistStamped(
+            header=setpoint.Header(
+                frame_id="some_frame_id",
+                stamp=rospy.Time.now()
+            )
+        )
+        pid_x = PID(*self.horizontal_pid)
+        pid_y = PID(*self.horizontal_pid)
+
+        initial_point = self.getStates()[:4]
+
+        def calculateAndSendOne():
+            current = self.getStates()[:4]
+            x_error = current[0] - initial_point[0]
+            y_error = current[1] - initial_point[1]
+            x_action = pid_x.action(x_error)
+            y_action = pid_y.action(y_error)
+            message_velocity.twist.linear.x = x_action
+            message_velocity.twist.linear.y = y_action
+            message_velocity.twist.linear.z = velocity
+            message_velocity.twist.angular.z = 0
+            self.setpoint_velocity.publish(message_velocity)
+
+        calculateAndSendOne()
+        self.nav_mod = "VELOCITY"
+
+        rate = rospy.Rate(20)
+        time_start = time()
+        while not rospy.is_shutdown() and time() - time_start < duration:
+            calculateAndSendOne()
+            rate.sleep()
 
     def stabilize(self, duration, point=None):
         if point is None:
@@ -315,12 +371,12 @@ class AerialNavigation:
         message_velocity = setpoint.TwistStamped(
             header=setpoint.Header(
                 frame_id="some_frame_id",
-                stamp=rospy.Rime.now()
+                stamp=rospy.Time.now()
             )
         )
 
-        horizontal_p, horizontal_i, horizontal_d = .1, 0, 0
-        vertical_p, vertical_i, vertical_d = .1, 0, 0
+        horizontal_p, horizontal_i, horizontal_d = self.horizontal_pid
+        vertical_p, vertical_i, vertical_d = self.vertical_pid
         integrated_error_x = 0
         integrated_error_y = 0
         integrated_error_z = 0
@@ -328,16 +384,16 @@ class AerialNavigation:
         time_old = time()
         time_start = time()
         self.nav_mod = "VELOCITY"
-        while time() - time_start < duration:
+        while time() - time_start < duration and not rospy.is_shutdown():
             states = self.getStates()
             time_now = time()
-            time_difference = now - time_old
+            time_difference = time_now - time_old
             time_old = time_now
-            error_x = point[0] - states[0]
+            error_x = states[0] - point[0]
             integrated_error_x += error_x * time_difference
-            error_y = point[1] - states[1]
+            error_y = states[1] - point[1]
             integrated_error_y += error_y * time_difference
-            error_z = point[2] - states[2]
+            error_z = states[2] - point[2]
             integrated_error_z += error_z * time_difference
 
             velocity_action_x = horizontal_p * error_x +\
@@ -352,9 +408,13 @@ class AerialNavigation:
                 vertical_i * integrated_error_z +\
                 vertical_d * (states[0] - previous_z) / time_difference
 
+            print "errors %+0.2f, %+0.2f, %+0.2f" % (error_x, error_y, error_z),
+            print "action %+0.2f, %+0.2f, %+0.2f" % (velocity_action_x, velocity_action_y, velocity_action_z)
+
             message_velocity.twist.linear.x = velocity_action_x
             message_velocity.twist.linear.y = velocity_action_y
             message_velocity.twist.linear.z = velocity_action_z
+            message_velocity.header.stamp = rospy.Time.now()
             self.setpoint_velocity.publish(message_velocity)
 
             x_previous, y_previous, z_previous = states[:3]
@@ -362,64 +422,32 @@ class AerialNavigation:
 
 
 def setpoint_demo(navigation, ):
-    time_sleep = 3
+    # time_sleep = 3
     sleep(2)
-    start_x, start_y, start_z = hexacopter_navigation.getPosition()
+    start_x, start_y, start_z = navigation.getPosition()
     print 'Started from', start_x, start_y, start_z
-    navigation.changeAltitude(.4)
-    sleep(time_sleep)
+    # navigation.changeAltitude(.4)
+    # sleep(time_sleep)
     for i in range(1):
         print "Attempt", i
 
-        navigation.horizontalTarget(0, 0)
-        sleep(time_sleep)
+        # navigation.horizontalTarget(0, 0)
+        # sleep(time_sleep)
         cond_pos = navigation.getStates()
 
         def cond():
             current_pos = navigation.getStates()
-            getError(current_pos, cond_pos, .2)
+            return getError(current_pos, cond_pos, .2)
 
         print('Condition test:', cond())
 
-        navigation.targetVelocity(0, 0, -.05, 0, cond)
-        # navigation.horizontalTarget(1, 1)
-        # sleep(time_sleep)
-        # navigation.dynamicHover(2, .8, 10)
-        # sleep(time_sleep)
-        # navigation.dynamicHover(2, .6, 10)
-        # sleep(time_sleep)
-        # navigation.dynamicHover(2, .6, 10)
-        # sleep(time_sleep)
+        navigation.stabilize(60., [0., .1, 0.])
 
-        # navigation.dynamicHover(2, .8, 5)
-        # sleep(time_sleep)
-        # navigation.horizontalTarget(0, 0)
-        # sleep(time_sleep)
-        # navigation.goToAltitude(start_z + .1)
-        navigation.exactLand(0, 0)
-
-        # navigation.horizontalTarget(start_x + .3, start_y + .3)
-        # sleep(time_sleep)
-        # navigation.horizontalTarget(start_x, start_y)
-        # sleep(time_sleep)
-        # navigation.targetPoint(start_x, start_y, start_z + .5, 1, True)
-        # navigation.targetPoint(start_x, start_y, start_z + .2)
-        # navigation.hoverAbove(1, .3)
-        # sleep(time_sleep)
-        # navigation.goToAltitude(.3)
-        # sleep(time_sleep)
-        # navigation.changeAltitude(.2)
-        # sleep(time_sleep)
-        # navigation.horizontalTarget(start_x, start_y)
-        # sleep(time_sleep)
-        # navigation.inPlaceLand(False)
-        # navigation.changeAltitude(-.1)
-        # navigation.changeAltitude(-.1)
     navigation.inPlaceLand()
 
 
 if __name__ == '__main__':
-    sleep_time = 1
+    sleep_time = 3
     while sleep_time > 0:
         print "Mission starts in:", sleep_time
         sleep_time -= 1
@@ -434,4 +462,5 @@ if __name__ == '__main__':
         print 'EXCEPTION', e
         hexacopter_navigation.inPlaceLand(False)
         sleep(10)
+        raise
         raise e

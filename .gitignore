@@ -1,0 +1,3 @@
+logs/*
+project_information.txt
+**/*.pyc

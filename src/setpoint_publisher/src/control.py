@@ -22,7 +22,7 @@ class PID(object):
             self.upper_limit = None
         elif type(windup) is list:
             if len(windup) > 2:
-                raise ControlError('Length of `windup` argument should be less or equal to 2.')
+                raise ControlError('Length of `windup` argument shouldn\'t be more than 2.')
             if len(windup) == 1:
                 windup.append(-windup[0])
             self.upper_limit = max(windup)
@@ -117,7 +117,7 @@ def controlTest():
     obj.position = 1
     error = 0 - obj.applyForce(0, .01)
     history_error = [error]
-    controller = PID(20, 1, .015, windup=1.5)
+    controller = PID(20, 1, .015, windup=-1.5)
     for i in range(count):
         act = saturate(controller.action(error), 1.5, -1.5)
         error = 0 - obj.applyForce(act, 0.01)
@@ -132,5 +132,6 @@ def controlTest():
     mlt.show()
 
 if __name__ == "__main__":
-    # forceTest()
+    forceTest()
     controlTest()
+    pass

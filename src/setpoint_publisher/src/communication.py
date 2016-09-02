@@ -112,38 +112,6 @@ class MessageVerification(object):
         self.logger.info("Connection closed.")
 
 
-class NaslabNetwork(object):
-
-    def __init__(self, ip_address='192.168.0.25'):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.settimeout(1)
-        server_address = (ip_address, 1895)
-        print >>sys.stderr, 'Connecting To %s Port %s' % server_address
-        self.sock.connect(server_address)
-        self.degree_to_rad = np.pi / 180
-
-    def getStates(self, num):
-        # get position
-        check = struct.unpack('<B', self.sock.recv(1))[0]
-        if check is not 2:
-            print 'Warning: Bad Qualisys Packet'
-            pose_msg_x = float('nan')
-        recieved_data = self.sock.recv(4096)
-        if len(recieved_data) < 12:
-            print 'bad 2'
-            pose_msg_x = float('nan')
-        num_byte = num * 24
-        pose_msg_x = struct.unpack('<f', recieved_data[num_byte:num_byte + 4])[0]
-        pose_msg_y = struct.unpack('<f', recieved_data[num_byte + 4:num_byte + 8])[0]
-        pose_msg_theta = struct.unpack('<f', recieved_data[num_byte + 12:num_byte + 16])[0]
-        # print num, pose_msg_theta
-        return pose_msg_x, pose_msg_y, pose_msg_theta
-
-    def close(self):
-        self.sock.close()
-
-
 class LabLocalization(object):
 
     def __init__(self, ip_address='192.168.0.25'):
