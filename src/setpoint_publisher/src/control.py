@@ -10,13 +10,13 @@ def saturate(value, upper_limit, lower_limit):
 
 
 class PID(object):
-    def __init__(self, p, i, d, windup):
-        self.integrated = 0
-        self.previous_error = 0
+    def __init__(self, p, i, d, windup=None):
+        self.integrated = 0.
+        self.previous_error = 0.
         self.time = time()
-        self.coef_p = p
-        self.coef_i = i
-        self.coef_d = d
+        self.coef_p = float(p)
+        self.coef_i = float(i)
+        self.coef_d = float(d)
         self.action = self.__firstIteration
         if windup is None:
             self.upper_limit = None
@@ -25,21 +25,27 @@ class PID(object):
                 raise ControlError('Length of `windup` argument shouldn\'t be more than 2.')
             if len(windup) == 1:
                 windup.append(-windup[0])
-            self.upper_limit = max(windup)
-            self.lower_limit = min(windup)
-        elif type(1. * windup) is float:
+            self.upper_limit = max(float(windup))
+            self.lower_limit = min(float(windup))
+        elif type(windup) in [float,int]:
             if windup <= 0:
                 raise ControlError('Value for windup argument should be greater than 0.')
-            self.upper_limit = windup
-            self.lower_limit = -windup
+            self.upper_limit = 1.*windup
+            self.lower_limit = -1.*windup
 
     def setProportional(self, value):
+        if value<=0:
+            raise ControlError('The gain should be greater than zero.')
         self.coef_p = value
 
     def setIntegral(self, value):
+        if value<=0:
+            raise ControlError('The gain should be greater than zero.')
         self.coef_i = value
 
     def setDerivative(self, value):
+        if value<=0:
+            raise ControlError('The gain should be greater than zero.')
         self.coef_d = value
 
     def setCoefficients(self, pid_coefficients):
@@ -63,11 +69,11 @@ class PID(object):
 
         # self.integrated += (error + self.previous_windup) * time_difference
         action = self.coef_p * error + self.coef_i * local_integrated + self.coef_d * derivetive
-        action_difference = action - saturate(action, self.upper_limit, self.lower_limit)
-        if action_difference == 0.:
+        saturated_action = saturate(action, self.upper_limit, self.lower_limit)
+        if saturated_action == action:
             self.integrated = local_integrated
         self.time = now
-        return action - action_difference
+        return saturated_action
 
     def __loop(self, error):
         now = time()
@@ -98,7 +104,7 @@ def forceTest():
     import matplotlib.pyplot as plt
     obj = MassSpringDamper(5, 10, 1)
     history_position = [obj.applyForce(1, .01)]
-    length = 3000
+    length = 1000
     for _ in range(length):
         position = obj.applyForce(0, 0.01)
         history_position.append(position)
@@ -110,28 +116,37 @@ def controlTest():
     from time import sleep
     from numpy import sin
     import matplotlib.pyplot as mlt
-    count = 200
-    history_action = []
+    
+    count = 300
+    time_step = .01
+    initia_position = 1.
+    initial_velocity = 0.
+    desired_position = 0.
+    obj = MassSpringDamper(.01, 0, 10)
+    controller = PID(4, 0, .0, None)
+    saturation_limit = 1.5
 
-    obj = MassSpringDamper(.1, 0, 6)
-    obj.position = 1
-    error = 0 - obj.applyForce(0, .01)
-    history_error = [error]
-    controller = PID(20, 1, .015, windup=-1.5)
+    history_action = []
+    obj.position = initia_position
+    obj.velocity = initial_velocity
+    position = obj.applyForce(0, time_step)
+    error = desired_position - position
+    history_position = [position]
     for i in range(count):
-        act = saturate(controller.action(error), 1.5, -1.5)
-        error = 0 - obj.applyForce(act, 0.01)
+        act = saturate(controller.action(error), saturation_limit, -saturation_limit)
+        position = obj.applyForce(act, time_step)
+        error = 0 - position
         print('Error: %+0.2f | Action: %+0.2f' % (error, act))
-        sleep(.01)
-        history_error.append(error)
+        sleep(time_step)
+        history_position.append(position)
         history_action.append(act)
 
-    print('overshoot', max(history_error))
-    mlt.plot(range(count + 1), history_error)
+    print('Overshoot:', max(history_position))
+    mlt.plot(range(count + 1), history_position)
     mlt.plot(range(count), history_action)
     mlt.show()
 
 if __name__ == "__main__":
-    forceTest()
+    # forceTest()
     controlTest()
     pass
